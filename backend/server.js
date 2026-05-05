@@ -3,6 +3,8 @@ const cors = require('cors')
 const swaggerJsdoc = require('swagger-jsdoc')
 const swaggerUi = require('swagger-ui-express')
 const Redis = require('ioredis')
+const fs = require('fs')
+const initSqlJs = require('sql.js')
 require('dotenv').config()
 
 process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0'
@@ -11,16 +13,33 @@ const app = express()
 app.use(cors())
 app.use(express.json())
 
+// Banco de dados SQLite em memoria com sql.js
+let db
+initSqlJs().then(SQL => {
+  db = new SQL.Database()
+  db.run(`
+    CREATE TABLE IF NOT EXISTS quotes_history (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      symbol TEXT NOT NULL,
+      price REAL NOT NULL,
+      change_percent REAL NOT NULL,
+      created_at TEXT DEFAULT (datetime('now'))
+    )
+  `)
+  console.log('Banco de dados iniciado')
+})
+
+// Redis
 const redis = new Redis({
   host: process.env.REDIS_HOST || 'localhost',
   port: 6379,
   lazyConnect: true
 })
-
 redis.on('error', (err) => {
   console.log('Redis indisponivel:', err.message)
 })
 
+// Swagger
 const swaggerSpec = swaggerJsdoc({
   definition: {
     openapi: '3.0.0',
@@ -52,7 +71,7 @@ app.get('/health', (req, res) => {
  * /quotes:
  *   get:
  *     summary: Retorna cotacoes atuais de IBOV, LWSA3 e Dolar
- *     description: Dados cacheados no Redis por 30 segundos
+ *     description: Dados cacheados no Redis por 30 segundos e persistidos no SQLite
  *     responses:
  *       200:
  *         description: Cotacoes retornadas com sucesso
@@ -84,6 +103,16 @@ app.get('/quotes', async (req, res) => {
       USD:   usdJson.results[0]
     }
 
+    if (db) {
+      db.run('INSERT INTO quotes_history (symbol, price, change_percent) VALUES (?,?,?)',
+        ['LWSA3', data.LWSA3.regularMarketPrice, data.LWSA3.regularMarketChangePercent])
+      db.run('INSERT INTO quotes_history (symbol, price, change_percent) VALUES (?,?,?)',
+        ['IBOV', data.IBOV.regularMarketPrice, data.IBOV.regularMarketChangePercent])
+      db.run('INSERT INTO quotes_history (symbol, price, change_percent) VALUES (?,?,?)',
+        ['USD', data.USD.regularMarketPrice, data.USD.regularMarketChangePercent])
+      console.log('Cotacoes salvas no banco')
+    }
+
     await redis.set('quotes', JSON.stringify(data), 'EX', 30).catch(() => null)
     console.log('Cache miss — dados frescos da brapi')
 
@@ -92,6 +121,26 @@ app.get('/quotes', async (req, res) => {
     console.error('ERRO:', err.message)
     res.status(500).json({ error: 'Falha ao buscar cotacoes' })
   }
+})
+
+/**
+ * @swagger
+ * /history:
+ *   get:
+ *     summary: Historico de cotacoes salvas no banco
+ *     responses:
+ *       200:
+ *         description: Historico retornado com sucesso
+ */
+app.get('/history', (req, res) => {
+  if (!db) return res.json([])
+  const result = db.exec('SELECT * FROM quotes_history ORDER BY created_at DESC LIMIT 50')
+  if (!result.length) return res.json([])
+  const cols = result[0].columns
+  const rows = result[0].values.map(r =>
+    Object.fromEntries(cols.map((c, i) => [c, r[i]]))
+  )
+  res.json(rows)
 })
 
 app.listen(3001, () => {
