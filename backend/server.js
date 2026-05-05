@@ -1,5 +1,7 @@
 const express = require('express')
 const cors = require('cors')
+const swaggerJsdoc = require('swagger-jsdoc')
+const swaggerUi = require('swagger-ui-express')
 require('dotenv').config()
 
 process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0'
@@ -8,10 +10,44 @@ const app = express()
 app.use(cors())
 app.use(express.json())
 
+// Swagger
+const swaggerSpec = swaggerJsdoc({
+  definition: {
+    openapi: '3.0.0',
+    info: {
+      title: 'Cotações API',
+      version: '1.0.0',
+      description: 'API de cotações em tempo real — IBOV, LWSA3 e Dólar'
+    }
+  },
+  apis: ['./server.js']
+})
+app.use('/swagger', swaggerUi.serve, swaggerUi.setup(swaggerSpec))
+
+/**
+ * @swagger
+ * /health:
+ *   get:
+ *     summary: Status da API
+ *     responses:
+ *       200:
+ *         description: API funcionando
+ */
 app.get('/health', (req, res) => {
   res.json({ status: 'ok', time: new Date().toISOString() })
 })
 
+/**
+ * @swagger
+ * /quotes:
+ *   get:
+ *     summary: Retorna cotações atuais de IBOV, LWSA3 e Dólar
+ *     responses:
+ *       200:
+ *         description: Cotações retornadas com sucesso
+ *       500:
+ *         description: Erro ao buscar cotações
+ */
 app.get('/quotes', async (req, res) => {
   try {
     const token = process.env.BRAPI_TOKEN
