@@ -1,11 +1,10 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 
 interface Quote {
   symbol: string
   shortName: string
   regularMarketPrice: number
   regularMarketChangePercent: number
-  regularMarketChange: number
 }
 
 interface Quotes {
@@ -15,7 +14,7 @@ interface Quotes {
 }
 
 function QuoteCard({ data, label }: { data: Quote; label: string }) {
-  const isUp = data.regularMarketChangePercent >= 0
+  const isUp  = data.regularMarketChangePercent >= 0
   const color = isUp ? '#00a651' : '#e63946'
   const arrow = isUp ? '▲' : '▼'
 
@@ -40,41 +39,56 @@ function QuoteCard({ data, label }: { data: Quote; label: string }) {
 }
 
 export default function App() {
-  const [quotes, setQuotes] = useState<Quotes | null>(null)
+  const [quotes,  setQuotes]  = useState<Quotes | null>(null)
   const [loading, setLoading] = useState(true)
-  const [error, setError] = useState('')
-
-  const load = async () => {
-    try {
-      const res = await fetch('http://localhost:3001/quotes')
-      const data = await res.json()
-      setQuotes(data)
-      setLoading(false)
-    } catch {
-      setError('Erro ao carregar cotacoes')
-      setLoading(false)
-    }
-  }
+  const [error,   setError]   = useState('')
+  const workerRef = useRef<Worker | null>(null)
 
   useEffect(() => {
+    // Cria o Web Worker
+    workerRef.current = new Worker(new URL('./quotesWorker.js', import.meta.url))
+
+    // Recebe dados do worker
+    workerRef.current.onmessage = (e) => {
+      if (e.data.success) {
+        setQuotes(e.data.data)
+        setLoading(false)
+      } else {
+        setError('Erro ao carregar cotacoes')
+        setLoading(false)
+      }
+    }
+
+    // Funcao que dispara a busca no worker
+    const load = () => {
+      workerRef.current?.postMessage({ url: 'http://localhost:3001/quotes' })
+    }
+
     load()
     const timer = setInterval(load, 30000)
-    return () => clearInterval(timer)
+
+    return () => {
+      clearInterval(timer)
+      workerRef.current?.terminate()
+    }
   }, [])
 
   if (loading) return <p style={{ color: '#fff', textAlign: 'center', marginTop: '100px' }}>Carregando...</p>
-  if (error) return <p style={{ color: 'red', textAlign: 'center', marginTop: '100px' }}>{error}</p>
+  if (error)   return <p style={{ color: 'red',  textAlign: 'center', marginTop: '100px' }}>{error}</p>
   if (!quotes) return null
 
   return (
     <div style={{ background: '#13131f', minHeight: '100vh', padding: '40px 20px' }}>
-      <h1 style={{ color: '#fff', textAlign: 'center', marginBottom: '40px', fontSize: '28px' }}>
+      <h1 style={{ color: '#fff', textAlign: 'center', marginBottom: '8px', fontSize: '28px' }}>
         Cotações ao Vivo
       </h1>
+      <p style={{ color: '#555', textAlign: 'center', marginBottom: '40px', fontSize: '13px' }}>
+        Atualizado via Web Worker a cada 30s
+      </p>
       <div style={{ display: 'flex', gap: '20px', justifyContent: 'center', flexWrap: 'wrap' }}>
         <QuoteCard data={quotes.LWSA3} label="LWSA3 — Locaweb" />
-        <QuoteCard data={quotes.IBOV} label="IBOV — Ibovespa" />
-        <QuoteCard data={quotes.USD} label="USD — Dólar" />
+        <QuoteCard data={quotes.IBOV}  label="IBOV — Ibovespa" />
+        <QuoteCard data={quotes.USD}   label="USD — Dólar" />
       </div>
     </div>
   )
